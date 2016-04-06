@@ -11,14 +11,18 @@ Current problems:
 delete from post where author in (select id from user where email like "%legion%");
 delete from user where email like "%legion%";
 """
-import sys
 import unittest
 import requests
+import argparse
 import json
 import random
 
-# todo: Make the port a sys argument
-SERVER_DOMAIN = "http://127.0.0.1:5000"
+parser = argparse.ArgumentParser(description='Twidder backend test suite. Assumes server is running on localhost')
+parser.add_argument('--port', default=5000, help='The port where server is running')
+
+args = parser.parse_args()
+
+SERVER_DOMAIN = "http://127.0.0.1:%s" % args.port
 
 
 class TestServerAuthenticationMethods(unittest.TestCase):
@@ -245,7 +249,7 @@ class TestServerAuthenticatedMethods(unittest.TestCase):
 
     @classmethod
     def tearDownClass(cls):
-        # todo: Delete users somehow?
+        # todo: Delete users somehow
         pass
 
 
@@ -268,5 +272,9 @@ def suite():
 mySuit = suite()
 
 if __name__ == '__main__':
-    runner = unittest.TextTestRunner()
-    runner.run(mySuit)
+    try:
+        requests.get("%s/" % SERVER_DOMAIN)
+        runner = unittest.TextTestRunner()
+        runner.run(mySuit)
+    except requests.exceptions.ConnectionError:
+        print "Error: No backend found on this port. See help for usage."

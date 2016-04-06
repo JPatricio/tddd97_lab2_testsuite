@@ -1,28 +1,20 @@
 """
-A single test run won't cause any "user already registered" problem. But running it twice.. not so much.
-Thoughts on how to fix..?
+Rather then twidder, should import whatever your project's main file is
 
 Current problems:
     - Cross runs can spawn a "user already registered" problem
     - No specifications regarding database field max size may cause issues when running tests for some students?
     - Should a test test that some method works with post and doesn't work with get (or vice-versa) at the same time?
-    -
 
 delete from post where author in (select id from user where email like "%legion%");
 delete from user where email like "%legion%";
 """
+import twidder
+import os
 import unittest
-import requests
-import argparse
+import tempfile
 import json
 import random
-
-parser = argparse.ArgumentParser(description='Twidder backend test suite. Assumes server is running on localhost')
-parser.add_argument('--port', default=5000, help='The port where server is running')
-
-args = parser.parse_args()
-
-SERVER_DOMAIN = "http://127.0.0.1:%s" % args.port
 
 
 class TestServerAuthenticationMethods(unittest.TestCase):
@@ -34,19 +26,27 @@ class TestServerAuthenticationMethods(unittest.TestCase):
         cls.user_info = dict(email="fiery_archy@burninglegion.net", password="thetrueeredar", firstname="Archimonde",
                              familyname="the defiler", gender="male", city="Mac'Aree", country="Argus")
 
+    def setUp(self):
+        self.db_fd, twidder.app.config['DATABASE'] = tempfile.mkstemp()
+        twidder.app.config['TESTING'] = True
+        self.app = twidder.app.test_client()
+        # todo:  Hard-coded for my own project, change it.
+        twidder.db.create_all()
+
     def testSignUp(self):
         """
         Description: Registers a user in the database
         Input: Seven string values representing the following: e-mail, password, firstname, familyname, gender, city and country
         :return string in JSON format with success and message :
         """
-        r = requests.get('%s/sign_up/' % SERVER_DOMAIN, params=self.user_info)
+        response = self.app.get('/sign_up/', query_string=self.user_info)
         # Is this ok? What if the students "accept" the get method but have their own custom method of denying it?
-        self.assertNotEqual(r.status_code, 200)
-        r = requests.post('%s/sign_up/' % SERVER_DOMAIN, data=self.user_info)
-        self.assertEqual(r.status_code, 200)
-        response = json.loads(r.text)
-        self.assertTrue(response['success'])
+        self.assertNotEqual(response.status_code, 200)
+
+        response = self.app.post('/sign_up/', data=self.user_info)
+        self.assertEqual(response.status_code, 200)
+        jsoned_response = json.loads(response.data)
+        self.assertTrue(jsoned_response['success'])
 
     def testSignIn(self):
         """
@@ -57,14 +57,18 @@ class TestServerAuthenticationMethods(unittest.TestCase):
         successful.
         :return A text string containing a randomly generated access token if the authentication is successful:
         """
-        r = requests.get('%s/sign_in/' % SERVER_DOMAIN, params={'email': self.user_info['email'], 'password': self.user_info['password']})
-        self.assertNotEqual(r.status_code, 200)
+        response = self.app.get('/sign_in/', query_string={'email': self.user_info['email'], 'password': self.user_info['password']})
+        self.assertNotEqual(response.status_code, 200)
 
-        r = requests.post('%s/sign_in/' % SERVER_DOMAIN, data={'email': self.user_info['email'], 'password': self.user_info['password']})
-        self.assertEqual(r.status_code, 200)
-        response = json.loads(r.text)
+        response = self.app.post('/sign_in/', data={'email': self.user_info['email'], 'password': self.user_info['password']})
+        self.assertEqual(response.status_code, 200)
+        response = json.loads(response.data)
         self.assertTrue(response['success'])
         self.assertTrue("token" in response['data'])
+
+    def tearDown(self):
+        os.close(self.db_fd)
+        os.unlink(twidder.app.config['DATABASE'])
 
 
 class TestServerAuthenticatedMethods(unittest.TestCase):
@@ -81,6 +85,12 @@ class TestServerAuthenticatedMethods(unittest.TestCase):
         """
         Set up a new account for this test and proceeds to sign in
         """
+        self.db_fd, twidder.app.config['DATABASE'] = tempfile.mkstemp()
+        twidder.app.config['TESTING'] = True
+        self.app = twidder.app.test_client()
+        # todo:  Hard-coded for my own project, change it.
+        twidder.db.create_all()
+
         letters = "abcdefghiklmnopqrstuvwwxyz"
         email_name = ""
         while email_name in self.used_mails:
@@ -91,15 +101,15 @@ class TestServerAuthenticatedMethods(unittest.TestCase):
         self.user_info["email"] = "%s%s" % (email_name,  self.user_info["email"])
         self.used_mails.append(email_name)
 
-        r = requests.post('%s/sign_up/' % SERVER_DOMAIN, data=self.user_info)
+        r = self.app.post('/sign_up/', data=self.user_info)
         self.assertEqual(r.status_code, 200)
-        response = json.loads(r.text)
+        response = json.loads(r.data)
         self.assertTrue(response['success'])
-        r = requests.post('%s/sign_in/' % SERVER_DOMAIN,
+        r = self.app.post('/sign_in/',
                           data={'email': self.user_info['email'], 'password': self.user_info['password']})
         self.assertEqual(r.status_code, 200)
 
-        response = json.loads(r.text)
+        response = json.loads(r.data)
         self.assertTrue(response['success'])
         self.assertTrue("token" in response['data'])
         self.token = response['data']['token']
@@ -114,20 +124,20 @@ class TestServerAuthenticatedMethods(unittest.TestCase):
         :return string in JSON format with success and message :
         """
         # Request password change to server
-        r = requests.get('%s/change_password/' % SERVER_DOMAIN,
-                          params=dict(token=self.token, old_password=self.user_info['password'], new_password="longlivesargeras"))
+        r = self.app.get('/change_password/',
+                         query_string=dict(token=self.token, old_password=self.user_info['password'], new_password="longlivesargeras"))
         self.assertNotEqual(r.status_code, 200)
 
-        r = requests.post('%s/change_password/' % SERVER_DOMAIN,
+        r = self.app.post('/change_password/',
                           data=dict(token=self.token, old_password=self.user_info['password'], new_password="longlivesargeras"))
         self.assertEqual(r.status_code, 200)
-        response = json.loads(r.text)
+        response = json.loads(r.data)
         self.assertTrue(response['success'])
 
         # Make sure the new password is the one used to sign in now
-        r = requests.post('%s/sign_in/' % SERVER_DOMAIN, data={'email': self.user_info['email'], 'password': "longlivesargeras"})
+        r = self.app.post('/sign_in/', data={'email': self.user_info['email'], 'password': "longlivesargeras"})
         self.assertEqual(r.status_code, 200)
-        response = json.loads(r.text)
+        response = json.loads(r.data)
         self.assertTrue(response['success'])
 
     def testSignOut(self):
@@ -136,20 +146,20 @@ class TestServerAuthenticatedMethods(unittest.TestCase):
         Input: A string containing the access token of the user requesting to sign out
         :return:
         """
-        r = requests.get('%s/sign_out/' % SERVER_DOMAIN,
-                          params=dict(token=self.token))
+        r = self.app.get('/sign_out/',
+                          query_string=dict(token=self.token))
         self.assertNotEqual(r.status_code, 200)
         # sign_out(token)
-        r = requests.post('%s/sign_out/' % SERVER_DOMAIN,
+        r = self.app.post('/sign_out/',
                           data=dict(token=self.token))
         self.assertEqual(r.status_code, 200)
-        response = json.loads(r.text)
+        response = json.loads(r.data)
         self.assertTrue(response['success'])
 
-        r = requests.get('%s/get_user_data_by_token/' % SERVER_DOMAIN,
+        r = self.app.get('/get_user_data_by_token/',
                          data=dict(token=self.token))
         self.assertEqual(r.status_code, 200)
-        response = json.loads(r.text)
+        response = json.loads(r.data)
         self.assertFalse(response['success'])
 
     def testGetUserDataByToken(self):
@@ -159,17 +169,17 @@ class TestServerAuthenticatedMethods(unittest.TestCase):
         Input: A string containing the access token of the current user
         :return A text string containing the following information- email, firstname, familyname, gender, city and country:
         """
-        r = requests.post('%s/get_user_data_by_token/' % SERVER_DOMAIN,
+        r = self.app.post('/get_user_data_by_token/',
                           data=dict(token=self.token))
         self.assertNotEqual(r.status_code, 200)
 
-        r = requests.get('%s/get_user_data_by_token/' % SERVER_DOMAIN,
-                         params=dict(token=self.token))
+        r = self.app.get('/get_user_data_by_token/',
+                         query_string=dict(token=self.token))
         self.assertEqual(r.status_code, 200)
-        response = json.loads(r.text)
+        response = json.loads(r.data)
         self.assertTrue(response['success'])
-        # Is this enough to assert that this response is ok, or do we want to check each key
-        # self.assertEqual(len(response['data']), 6)
+        # todo: Is this enough to assert that this response is ok, or do we want to check each key
+        self.assertEqual(len(response['data']), 6)
 
     def testGetUserDataByEmail(self):
         """
@@ -179,17 +189,16 @@ class TestServerAuthenticatedMethods(unittest.TestCase):
             - email: The email address of the user to retrieve data for
         :return A text string containing the following information- email, firstname, familyname, gender, city and country:
         """
-        r = requests.post('%s/get_user_data_by_token/' % SERVER_DOMAIN,
+        r = self.app.post('/get_user_data_by_token/',
                           data=dict(token=self.token, email="fiery_archy@burninglegion.net"))
         self.assertNotEqual(r.status_code, 200)
 
-        r = requests.get('%s/get_user_data_by_token/' % SERVER_DOMAIN,
-                         params=dict(token=self.token, email="fiery_archy@burninglegion.net"))
+        r = self.app.get('/get_user_data_by_token/',
+                         query_string=dict(token=self.token, email="fiery_archy@burninglegion.net"))
         self.assertEqual(r.status_code, 200)
-        response = json.loads(r.text)
+        response = json.loads(r.data)
         self.assertTrue(response['success'])
-        # todo: uncomment this!!
-        # self.assertEqual(len(response['data']), 6)
+        self.assertEqual(len(response['data']), 6)
 
     def testGetUserMessagesByToken(self):
         """
@@ -200,14 +209,13 @@ class TestServerAuthenticatedMethods(unittest.TestCase):
         :return A text string containing all of the messages sent to the user:
         """
         # todo: post message here first
-        r = requests.post('%s/get_user_messages_by_token/' % SERVER_DOMAIN,
+        r = self.app.post('/get_user_messages_by_token/',
                           data=dict(token=self.token))
         self.assertNotEqual(r.status_code, 200)
-
-        r = requests.get('%s/get_user_messages_by_token/' % SERVER_DOMAIN,
-                         params=dict(token=self.token))
+        r = self.app.get('/get_user_messages_by_token/',
+                         query_string=dict(token=self.token))
         self.assertEqual(r.status_code, 200)
-        response = json.loads(r.text)
+        response = json.loads(r.data)
         self.assertTrue(response['success'])
 
     def testGetUserMessagesByEmail(self):
@@ -218,14 +226,14 @@ class TestServerAuthenticatedMethods(unittest.TestCase):
             - email: the e-mail address of the user to retrieve messages for
         :return A text string containing all of the messages sent to the specified user:
         """
-        r = requests.post('%s/get_user_messages_by_email/' % SERVER_DOMAIN,
+        r = self.app.post('/get_user_messages_by_email/',
                           data=dict(token=self.token, email="fiery_archy@burninglegion.net"))
         self.assertNotEqual(r.status_code, 200)
 
-        r = requests.get('%s/get_user_messages_by_email/' % SERVER_DOMAIN,
-                         params=dict(token=self.token, email="fiery_archy@burninglegion.net"))
+        r = self.app.get('/get_user_messages_by_email/',
+                         query_string=dict(token=self.token, email="fiery_archy@burninglegion.net"))
         self.assertEqual(r.status_code, 200)
-        response = json.loads(r.text)
+        response = json.loads(r.data)
         self.assertTrue(response['success'])
 
     def testPostMessage(self):
@@ -234,17 +242,17 @@ class TestServerAuthenticatedMethods(unittest.TestCase):
         Input:
             - token: a string containing the access token of the current user
             - message: The message to post
-            - email: the e-mail address of the recipient
+             - email: the e-mail address of the recipient
         :return:
         """
-        r = requests.get('%s/post/' % SERVER_DOMAIN,
-                         params=dict(token=self.token, email="fiery_archy@burninglegion.net", message="For the legion!"))
+        r = self.app.get('/post/',
+                         query_string=dict(token=self.token, email="fiery_archy@burninglegion.net", message="For the legion!"))
         self.assertNotEqual(r.status_code, 200)
 
-        r = requests.post('%s/post/' % SERVER_DOMAIN,
+        r = self.app.post('/post/',
                           data=dict(token=self.token, email="fiery_archy@burninglegion.net", message="For the legion!"))
         self.assertEqual(r.status_code, 200)
-        response = json.loads(r.text)
+        response = json.loads(r.data)
         self.assertTrue(response['success'])
 
     @classmethod
@@ -253,7 +261,7 @@ class TestServerAuthenticatedMethods(unittest.TestCase):
         pass
 
 
-def suite():
+def custom_suite():
     suite = unittest.TestSuite()
     suite.addTest(TestServerAuthenticationMethods('testSignUp'))
     suite.addTest(TestServerAuthenticationMethods('testSignIn'))
@@ -269,12 +277,8 @@ def suite():
 
     return suite
 
-mySuit = suite()
+mySuit = custom_suite()
 
 if __name__ == '__main__':
-    try:
-        requests.get("%s/" % SERVER_DOMAIN)
-        runner = unittest.TextTestRunner()
-        runner.run(mySuit)
-    except requests.exceptions.ConnectionError:
-        print "Error: No backend found on this port. See help for usage."
+    runner = unittest.TextTestRunner()
+    runner.run(mySuit)
